@@ -1,0 +1,11 @@
+build-essential
+cmake
+wget
+curl
+nano
+htop
+net-tools
+iputils-ping
+gdb
+python3-colcon-common-extensions
+python3-setuptools

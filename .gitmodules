@@ -1,0 +1,4 @@
+[submodule "src/third_party/ros2_examples"]
+	path = src/third_party/ros2_examples
+	url = https://github.com/ros2/examples.git
+	branch = jazzy

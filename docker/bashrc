@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# 1. Path Discovery for Sourced Scripts
+# When sourcing, SCRIPT_DIR must be found via BASH_SOURCE
+ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 2. Search for .env (Root or Scripts folder)
+if [ -f "$ENV_DIR/.env" ]; then
+    export $(grep -v '^#' "$ENV_DIR/.env" | xargs)
+elif [ -f "$ENV_DIR/../.env" ]; then
+    export $(grep -v '^#' "$ENV_DIR/../.env" | xargs)
+fi
+
+# Fallback name
+CONTAINER_NAME="${PROJECT_NAME:-docker_template}"
+
+# 3. Source Standard ROS 2 Jazzy
+# Ubuntu 24.04 / ROS 2 Jazzy Jalisco
+if [ -f "/opt/ros/jazzy/setup.bash" ]; then
+    source /opt/ros/jazzy/setup.bash
+    source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash
+fi
+
+# 4. Source Project Workspace
+# Dynamically points to the project folder inside the container
+WORKSPACE_PATH="/home/ros/${CONTAINER_NAME}/install/setup.bash"
+
+if [ -f "$WORKSPACE_PATH" ]; then
+    source "$WORKSPACE_PATH"
+    echo "Sourced workspace: ${CONTAINER_NAME}"
+else
+    echo "Note: Workspace 'install' not found. Run 'colcon build' first."
+fi
+
+# 5. 2026 Essential Aliases
+alias build='colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo'
+alias cbp='colcon build --symlink-install --packages-select' # Build specific package
+alias sros='source /home/ros/${CONTAINER_NAME}/install/setup.bash'
+alias rt='ros2 topic list'
+alias rn='ros2 node list'
+
+echo "-------------------------------------------------------"
+echo "  ROS 2 Jazzy: ${CONTAINER_NAME}"
+echo "  Commands: build, sros, rt, rn"
+echo "-------------------------------------------------------"
