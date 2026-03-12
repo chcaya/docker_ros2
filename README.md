@@ -6,12 +6,14 @@ A professional, production-ready boilerplate for ROS 2 Jazzy Jalisco development
 
 ## 🏃 Quick Start
 
-**1. Clone the repository** ```bash
+**1. Clone the repository**
+```bash
 git clone --recursive git@github.com:chcaya/docker_ros2.git
 cd docker_ros2
 ```
 
-**2. Configure your Environment** ```bash
+**2. Configure your Environment**
+```bash
 # .env
 PROJECT_NAME=docker_project
 USERNAME=docker_user
