@@ -1,45 +1,71 @@
 #!/bin/bash
 
-# 1. Path Discovery for Sourced Scripts
-# When sourcing, SCRIPT_DIR must be found via BASH_SOURCE
-ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 1. Path Discovery
+# Dynamically handles the user home and project name
+WORKSPACE_DIR="$HOME/${PROJECT_NAME:-docker_template}"
 
-# 2. Search for .env (Root or Scripts folder)
-if [ -f "$ENV_DIR/.env" ]; then
-    export $(grep -v '^#' "$ENV_DIR/.env" | xargs)
-elif [ -f "$ENV_DIR/../.env" ]; then
-    export $(grep -v '^#' "$ENV_DIR/../.env" | xargs)
+# 2. Load Environment Variables (Single Source of Truth)
+if [ -f "$WORKSPACE_DIR/.env" ]; then
+    export $(grep -v '^#' "$WORKSPACE_DIR/.env" | xargs)
 fi
 
-# Fallback name
-CONTAINER_NAME="${PROJECT_NAME:-docker_template}"
-
-# 3. Source Standard ROS 2 Jazzy
-# Ubuntu 24.04 / ROS 2 Jazzy Jalisco
+# 3. Source Standard ROS 2 Jazzy (Underlay)
 if [ -f "/opt/ros/jazzy/setup.bash" ]; then
     source /opt/ros/jazzy/setup.bash
     source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash
 fi
 
-# 4. Source Project Workspace
-# Dynamically points to the project folder inside the container
-WORKSPACE_PATH="/home/ros/${CONTAINER_NAME}/install/setup.bash"
-
-if [ -f "$WORKSPACE_PATH" ]; then
-    source "$WORKSPACE_PATH"
-    echo "Sourced workspace: ${CONTAINER_NAME}"
-else
-    echo "Note: Workspace 'install' not found. Run 'colcon build' first."
+# 4. Source Project Workspace (Overlay)
+if [ -f "${WORKSPACE_DIR}/install/setup.bash" ]; then
+    source "${WORKSPACE_DIR}/install/setup.bash"
+    echo "Sourced workspace: ${PROJECT_NAME}"
 fi
 
-# 5. 2026 Essential Aliases
-alias build='colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo'
-alias cbp='colcon build --symlink-install --packages-select' # Build specific package
-alias sros='source /home/ros/${CONTAINER_NAME}/install/setup.bash'
+# 5. Safe Build Function
+# We use a function instead of an alias to allow for RAM calculation
+build() {
+    # 1. Calculate safe jobs: ~2GB RAM per thread is the ROS 2 safe zone
+    local ram_gb=$(free -g | awk '/^Mem:/{print $2}')
+    local safe_jobs=$(( ram_gb / 2 ))
+    
+    # Constraints: Never 0, never more than 2 for dev (to keep UI smooth)
+    [[ $safe_jobs -lt 1 ]] && safe_jobs=1
+    [[ $safe_jobs -gt 2 ]] && safe_jobs=2 
+
+    echo "--- Starting Safe Build (${safe_jobs} threads, Sequential) ---"
+
+    # 2. Force threading limits into the environment so CMake/Make obey
+    export MAKEFLAGS="-j${safe_jobs}"
+    export CMAKE_BUILD_PARALLEL_LEVEL=${safe_jobs}
+
+    # 3. Execute Build
+    # --executor sequential: Only one package at a time
+    # --parallel-workers: Hard limit on package concurrency
+    colcon build \
+        --symlink-install \
+        --executor sequential \
+        --parallel-workers "$safe_jobs" \
+        --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        "$@"
+}
+
+# 6. Essential Aliases & Utilities
+alias sros="source ${WORKSPACE_DIR}/install/setup.bash"
 alias rt='ros2 topic list'
 alias rn='ros2 node list'
+alias cbp='colcon build --symlink-install --packages-select'
+
+# A "Nuke" command to fix CMakeCache mismatch issues
+clean_build() {
+    read -p "Delete build, install, and log folders? (y/n): " confirm
+    if [[ $confirm == [yY] ]]; then
+        rm -rf "${WORKSPACE_DIR}/build" "${WORKSPACE_DIR}/install" "${WORKSPACE_DIR}/log"
+        echo "Workspace cleaned."
+    fi
+}
 
 echo "-------------------------------------------------------"
-echo "  ROS 2 Jazzy: ${CONTAINER_NAME}"
-echo "  Commands: build, sros, rt, rn"
+echo "  ROS 2 Jazzy: ${PROJECT_NAME:-docker_template}"
+echo "  User: $(whoami) | Home: $HOME"
+echo "  Commands: build, clean_build, sros, rt, rn"
 echo "-------------------------------------------------------"

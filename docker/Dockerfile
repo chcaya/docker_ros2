@@ -19,6 +19,11 @@ ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 ARG PROJECT_NAME=docker_template
 
+# BAKE THESE INTO THE IMAGE SO ENTRYPOINT CAN SEE THEM
+ENV USERNAME=${USERNAME}
+ENV PROJECT_NAME=${PROJECT_NAME}
+ENV USER_UID=${USER_UID}
+
 RUN if id -u $USER_UID >/dev/null 2>&1; then userdel -r $(id -un $USER_UID); fi \
     && groupadd --gid $USER_GID $USERNAME \
     && useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $USERNAME \
@@ -63,7 +68,7 @@ WORKDIR /home/${USERNAME}/${PROJECT_NAME}
 USER $USERNAME
 
 # Execute the postCreate script to bake the compiled ROS workspace into the image
-RUN /home/${USERNAME}/postCreate.sh
+RUN PROJECT_NAME=${PROJECT_NAME} /home/${USERNAME}/postCreate.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]
