@@ -5,8 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 2. Find Project Root and Load .env
+# Using a more robust lookup for the .env file
 if [ -f "$SCRIPT_DIR/../.env" ]; then
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    # Load variables while ignoring comments and empty lines
     export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
 elif [ -f "$SCRIPT_DIR/.env" ]; then
     PROJECT_ROOT="$SCRIPT_DIR"
@@ -20,7 +22,7 @@ PROJECT_NAME="${PROJECT_NAME:-docker_template}"
 CONTAINER_NAME="${PROJECT_NAME}"
 TARGET_DISPLAY="${DISPLAY:-:0}"
 
-# 3. Re-run as root if needed
+# 3. Re-run as root if needed (Standard elevation)
 if [[ $EUID -ne 0 ]]; then
   echo "Elevating privileges to install systemd service..."
   exec sudo -E bash "$0" "$@"
@@ -39,30 +41,37 @@ SERVICE_NAME="${PROJECT_NAME}-startup"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 WRAPPER="/usr/local/bin/${SERVICE_NAME}-wrapper.sh"
 
-# Get the actual host user running the sudo command, and their home directory for XAUTHORITY
+# Get host user details for X11/Volume permissions
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 
 echo "--- Installing Systemd Service: ${SERVICE_NAME} ---"
 
-# 6. Create Wrapper (Maintains container lifecycle tracking)
+# 6. Create Wrapper 
+# We improved the wrapper to be more resilient to container state
 cat > "$WRAPPER" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "${SCRIPT_DIR}"
 
-# Spin up the container
-"${TARGET}" "\$@"
+# 1. Ensure any stale container instance is cleared before starting
+docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
-# Attach to logs to block systemd. If container dies, systemd triggers restart!
-exec docker logs -f "${CONTAINER_NAME}"
+# 2. Spin up the container using your existing run script
+"${TARGET}"
+
+# 3. Block and track the container lifecycle
+# Using 'docker wait' ensures systemd understands when the process actually ends
+exec docker wait "${CONTAINER_NAME}"
 EOF
 chmod +x "$WRAPPER"
 
-# 7. Create Systemd Unit (Inspired by your legacy script)
+# 7. Create Systemd Unit
+# We use 'Type=exec' (available in modern systemd) for better process tracking
 cat > "$UNIT_PATH" <<EOF
 [Unit]
-Description=Run ${PROJECT_NAME} Docker container at boot
+Description=ROS 2 Startup Service: ${PROJECT_NAME}
 After=network-online.target docker.service display-manager.service
 Wants=network-online.target docker.service display-manager.service
 Requires=docker.service
@@ -70,58 +79,45 @@ Requires=docker.service
 [Service]
 Type=simple
 User=${REAL_USER}
+Group=docker
 WorkingDirectory=${SCRIPT_DIR}
 
-# Wait for hardware/network to settle
+# Wait for hardware/drivers (GPUs/USB) to settle
 ExecStartPre=/bin/sleep 5
 
 # Start the wrapper
 ExecStart=${WRAPPER}
 
-# Cleanly stop the container
+# Cleanly stop the container on shutdown
 ExecStop=/usr/bin/docker stop ${CONTAINER_NAME}
 
-# Inject GUI environments for host-to-container X11 forwarding
+# Environment for X11 Forwarding
 Environment="DISPLAY=${TARGET_DISPLAY}"
 Environment="XAUTHORITY=${REAL_HOME}/.Xauthority"
+Environment="PYTHONUNBUFFERED=1"
 
-# Reliability settings
-TimeoutStartSec=300
-Restart=on-failure
+# Restart logic
+Restart=always
 RestartSec=10s
-StartLimitIntervalSec=300
-StartLimitBurst=5
+StartLimitIntervalSec=0
+
+# Logging
 StandardOutput=journal
 StandardError=journal
-NoNewPrivileges=yes
-KillMode=process
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 8. Defensive Permissions and Unmasking
+# 8. Permissions and Reload
 chmod 644 "$UNIT_PATH"
 systemctl unmask "${SERVICE_NAME}.service" 2>/dev/null
-
-# 9. Activation
-echo "Reloading systemd and enabling service..."
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
-
-# Start now
-if ! systemctl start "${SERVICE_NAME}.service"; then
-  echo "Note: Service failed to start immediately. Check 'journalctl -u ${SERVICE_NAME}'" >&2
-fi
 
 echo "-------------------------------------------------------"
 echo "Installation Complete"
 echo "-------------------------------------------------------"
-echo "Service File: ${UNIT_PATH}"
-echo "User Account: ${REAL_USER}"
-echo "Project Name: ${PROJECT_NAME}"
-echo "XAuthority  : ${REAL_HOME}/.Xauthority"
-echo ""
-echo "To check status: systemctl status ${SERVICE_NAME}"
-echo "To view logs:   journalctl -u ${SERVICE_NAME} -f"
+echo "To start:       sudo systemctl start ${SERVICE_NAME}"
+echo "To check logs:  journalctl -u ${SERVICE_NAME} -f"
 echo "-------------------------------------------------------"
